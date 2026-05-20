@@ -3,6 +3,7 @@ using System.Data;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.AnalysisServices.AdomdClient;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -133,7 +134,11 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
 
     private static void WriteJson(object value)
     {
-        Console.WriteLine(JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine(JsonSerializer.Serialize(value, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+        }));
     }
 }
 
