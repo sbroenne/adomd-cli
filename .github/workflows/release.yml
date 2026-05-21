@@ -13,7 +13,7 @@ env:
 
 jobs:
   release:
-    name: Package and release
+    name: Publish and release
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -39,17 +39,18 @@ jobs:
       - name: Restore
         run: dotnet restore .\src\Adomd.Cli\Adomd.Cli.csproj
 
-      - name: Build
-        run: dotnet build .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-restore -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+      - name: Publish win-x64 executable
+        run: dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output .\artifacts\publish\win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
 
-      - name: Pack
-        run: dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-build --output .\artifacts\packages -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+      - name: Archive win-x64 executable
+        shell: pwsh
+        run: Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\adomd-cli-win-x64.zip -Force
 
-      - name: Upload package artifact
+      - name: Upload executable artifact
         uses: actions/upload-artifact@v7
         with:
-          name: packages
-          path: artifacts\packages\*.nupkg
+          name: adomd-cli-win-x64
+          path: artifacts\adomd-cli-win-x64.zip
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -57,5 +58,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $packages = @(Get-ChildItem -Path .\artifacts\packages -Filter *.nupkg | ForEach-Object { "./artifacts/packages/$($_.Name)" })
-          gh release create $env:GITHUB_REF_NAME $packages --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
+          gh release create $env:GITHUB_REF_NAME ./artifacts/adomd-cli-win-x64.zip --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
