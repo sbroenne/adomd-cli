@@ -17,12 +17,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
@@ -46,7 +46,7 @@ jobs:
         run: dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-build --output .\artifacts\packages -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: packages
           path: artifacts\packages\*.nupkg
