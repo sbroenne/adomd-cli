@@ -19,11 +19,17 @@ When `--connection-string` is omitted, the CLI builds a connection string with `
 
 ## Install
 
+Download `adomd-cli-win-x64.zip` from the latest GitHub Release, extract it, and run the self-contained Windows executable:
+
+```powershell
+.\adomd.exe --help
+```
+
 From a local clone:
 
 ```powershell
-dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --output .\artifacts\packages
-dotnet tool install --global --add-source .\artifacts\packages adomd-cli
+dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output .\artifacts\publish\win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
+.\artifacts\publish\win-x64\adomd.exe --help
 ```
 
 ## Usage
@@ -66,9 +72,9 @@ dotnet run --project src\Adomd.Cli -- query --connection-string "<connection str
 
 ## CI/CD
 
-- `CI` runs on pushes to `main` and pull requests. It restores, verifies formatting, builds, runs tests when test projects exist, packs the tool, and uploads the package artifact.
+- `CI` runs on pushes to `main` and pull requests. It restores, verifies formatting, builds, runs tests when test projects exist, publishes the Windows executable, and uploads the zipped artifact.
 - `CodeQL` runs on pushes, pull requests, and a weekly schedule.
-- `Release` runs for semantic version tags like `v1.2.3`. It builds and packs that version, creates a GitHub Release, and attaches the package artifact.
+- `Release` runs for semantic version tags like `v1.2.3`. It publishes the Windows executable, creates a GitHub Release, and attaches the zipped artifact.
 
 To create a release:
 

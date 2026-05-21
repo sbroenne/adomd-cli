@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build and pack
+    name: Build and publish
     runs-on: windows-latest
 
     steps:
@@ -58,12 +58,16 @@ jobs:
             dotnet test $project.FullName --configuration Release --logger trx --results-directory .\TestResults
           }
 
-      - name: Pack
-        run: dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-build --output .\artifacts\packages
+      - name: Publish win-x64 executable
+        run: dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output .\artifacts\publish\win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false
 
-      - name: Upload package artifact
+      - name: Archive win-x64 executable
+        shell: pwsh
+        run: Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\adomd-cli-win-x64.zip -Force
+
+      - name: Upload executable artifact
         uses: actions/upload-artifact@v7
         with:
-          name: packages
-          path: artifacts\packages\*.nupkg
+          name: adomd-cli-win-x64
+          path: artifacts\adomd-cli-win-x64.zip
           if-no-files-found: error
