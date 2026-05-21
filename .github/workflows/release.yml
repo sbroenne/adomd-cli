@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and release
+    runs-on: windows-latest
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Resolve package version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Tag '$env:GITHUB_REF_NAME' must be a semantic version tag like v1.2.3."
+          }
+
+          "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Restore
+        run: dotnet restore .\src\Adomd.Cli\Adomd.Cli.csproj
+
+      - name: Build
+        run: dotnet build .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-restore -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+
+      - name: Pack
+        run: dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-build --output .\artifacts\packages -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts\packages\*.nupkg
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $packages = Get-ChildItem -Path .\artifacts\packages -Filter *.nupkg | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME @packages --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
+
+      - name: Publish to NuGet
+        if: ${{ env.NUGET_API_KEY != '' }}
+        run: dotnet nuget push .\artifacts\packages\*.nupkg --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate

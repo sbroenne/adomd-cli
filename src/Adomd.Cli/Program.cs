@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
@@ -12,7 +13,10 @@ var app = new CommandApp();
 app.Configure(config =>
 {
     config.SetApplicationName("adomd");
-    config.SetApplicationVersion("0.1.0");
+    config.SetApplicationVersion(
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "0.1.0");
 
     config.AddCommand<ProbeCommand>("probe")
         .WithDescription("Open a connection and list visible catalogs.");

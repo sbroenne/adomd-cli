@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and pack
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore .\src\Adomd.Cli\Adomd.Cli.csproj
+
+      - name: Verify formatting
+        run: dotnet format .\Adomd.Cli.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-restore
+
+      - name: Test
+        shell: pwsh
+        run: |
+          $testProjects = Get-ChildItem -Path . -Recurse -Filter *.csproj |
+            Where-Object { $_.FullName -match '(?i)(test|tests)' }
+
+          if (-not $testProjects) {
+            Write-Host 'No test projects found.'
+            exit 0
+          }
+
+          foreach ($project in $testProjects) {
+            dotnet test $project.FullName --configuration Release --logger trx --results-directory .\TestResults
+          }
+
+      - name: Pack
+        run: dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-build --output .\artifacts\packages
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: artifacts\packages\*.nupkg
+          if-no-files-found: error

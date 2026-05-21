@@ -5,6 +5,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>adomd</AssemblyName>
     <PackageId>adomd-cli</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>sbroenne</Authors>
+    <Description>JSON-first command-line wrapper for querying Analysis Services through ADOMD.NET.</Description>
+    <PackageProjectUrl>https://github.com/sbroenne/adomd-cli</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/sbroenne/adomd-cli</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>analysis-services;adomd;ssas;azure-analysis-services;power-bi;xmla;cli</PackageTags>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>adomd</ToolCommandName>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -13,8 +25,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AnalysisServices.AdomdClient" Version="19.114.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="all" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

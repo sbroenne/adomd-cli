@@ -1,8 +1,26 @@
+## Build outputs
 bin/
 obj/
-.vs/
-.vscode/
-*.user
-*.suo
+artifacts/
 TestResults/
 coverage/
+*.nupkg
+*.snupkg
+
+## User and IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## Logs and temporary files
+*.log
+*.tmp
+*.temp
