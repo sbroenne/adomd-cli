@@ -26,12 +26,6 @@ dotnet pack .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --output .\
 dotnet tool install --global --add-source .\artifacts\packages adomd-cli
 ```
 
-After the package is published to NuGet:
-
-```powershell
-dotnet tool install --global adomd-cli
-```
-
 ## Usage
 
 ```powershell
@@ -74,7 +68,7 @@ dotnet run --project src\Adomd.Cli -- query --connection-string "<connection str
 
 - `CI` runs on pushes to `main` and pull requests. It restores, verifies formatting, builds, runs tests when test projects exist, packs the tool, and uploads the package artifact.
 - `CodeQL` runs on pushes, pull requests, and a weekly schedule.
-- `Release` runs for semantic version tags like `v1.2.3`. It builds and packs that version, creates a GitHub Release with the package attached, and publishes to NuGet when the repository secret `NUGET_API_KEY` is configured.
+- `Release` runs for semantic version tags like `v1.2.3`. It builds and packs that version, creates a GitHub Release, and attaches the package artifact.
 
 To create a release:
 
