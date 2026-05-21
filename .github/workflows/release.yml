@@ -57,5 +57,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $packages = Get-ChildItem -Path .\artifacts\packages -Filter *.nupkg | ForEach-Object { "./artifacts/packages/$($_.Name)" }
-          gh release create $env:GITHUB_REF_NAME @packages --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
+          $packages = @(Get-ChildItem -Path .\artifacts\packages -Filter *.nupkg | ForEach-Object { "./artifacts/packages/$($_.Name)" })
+          gh release create $env:GITHUB_REF_NAME $packages --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
