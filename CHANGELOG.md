@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.2]
+
+### Added
+- Passive update notification: when run interactively, the CLI performs a best-effort, once-per-day check against the GitHub Releases API and prints a one-line notice on stderr if a newer version is available. It never writes to stdout, is skipped when stderr is redirected (scripts/CI), fails silently offline, and can be disabled with `ADOMD_NO_UPDATE_CHECK=1`.
+
 ## [0.2.1]
 
 ### Added
