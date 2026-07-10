@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.RegularExpressions;
 using Microsoft.AnalysisServices.AdomdClient;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -45,7 +47,7 @@ public sealed class ProbeCommand : JsonCommand<CommonSettings>
     protected override object ExecuteJson(CommonSettings settings, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
         var catalogs = AnalysisServices.ReadCatalogs(connection, settings.Limit);
 
         return new
@@ -66,7 +68,7 @@ public sealed class CatalogsCommand : JsonCommand<CommonSettings>
 {
     protected override object ExecuteJson(CommonSettings settings, CancellationToken cancellationToken)
     {
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
         return new
         {
             ok = true,
@@ -107,7 +109,7 @@ public sealed class SchemaCommand : JsonCommand<SchemaSettings>
 {
     protected override object ExecuteJson(SchemaSettings settings, CancellationToken cancellationToken)
     {
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
         var cubes = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Cubes, settings.Limit);
@@ -151,7 +153,7 @@ public sealed class QueryCommand : JsonCommand<QuerySettings>
     protected override object ExecuteJson(QuerySettings settings, CancellationToken cancellationToken)
     {
         var query = settings.ResolveQuery();
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
         var resultSets = AnalysisServices.ExecuteTabular(connection, query, settings.Limit, settings.QueryTimeoutSeconds, cancellationToken);
 
         return new
@@ -192,13 +194,15 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"adomd error: {ex.Message}");
+            var message = SecretRedactor.Redact(ex.Message);
+            var innerMessage = SecretRedactor.Redact(ex.InnerException?.Message);
+            Console.Error.WriteLine($"adomd error: {message}");
             WriteJson(new
             {
                 ok = false,
-                error = ex.Message,
+                error = message,
                 exception = ex.GetType().FullName,
-                inner = ex.InnerException?.Message
+                inner = innerMessage
             });
             return ExitCodes.Error;
         }
@@ -214,6 +218,23 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         }));
     }
+}
+
+/// <summary>Scrubs credential-bearing fragments (passwords, secrets, tokens) out of text before it is ever
+/// written to stderr or the JSON error payload. Some ADOMD/OLE DB providers echo the full connection string
+/// back in exception messages, which would otherwise leak secrets passed via --connection-string.</summary>
+public static partial class SecretRedactor
+{
+    [GeneratedRegex(
+        @"(?<key>password|pwd|secret|client secret|access token)\s*=\s*[^;]*",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex SecretPattern();
+
+    [return: NotNullIfNotNull(nameof(text))]
+    public static string? Redact(string? text) =>
+        text is null
+            ? null
+            : SecretPattern().Replace(text, match => $"{match.Groups["key"].Value.ToLowerInvariant()}=***");
 }
 
 public class CommonSettings : CommandSettings
@@ -240,6 +261,16 @@ public class CommonSettings : CommandSettings
     [DefaultValue(15)]
     public int ConnectTimeoutSeconds { get; init; }
 
+    [CommandOption("--retries <N>")]
+    [Description("Number of times to retry opening the connection after a transient failure.")]
+    [DefaultValue(0)]
+    public int Retries { get; init; }
+
+    [CommandOption("--retry-delay-ms <MILLISECONDS>")]
+    [Description("Delay between connection retry attempts, in milliseconds.")]
+    [DefaultValue(1000)]
+    public int RetryDelayMilliseconds { get; init; }
+
     /// <summary>The connection string to use, preferring the explicit option and falling back to the
     /// <c>ADOMD_CONNECTION_STRING</c> environment variable so secrets don't need to appear on the command line.</summary>
     public string? ResolveConnectionString() =>
@@ -262,6 +293,16 @@ public class CommonSettings : CommandSettings
         if (ConnectTimeoutSeconds <= 0)
         {
             return ValidationResult.Error("--connect-timeout must be a positive integer.");
+        }
+
+        if (Retries < 0)
+        {
+            return ValidationResult.Error("--retries must be zero or a positive integer.");
+        }
+
+        if (RetryDelayMilliseconds < 0)
+        {
+            return ValidationResult.Error("--retry-delay-ms must be zero or a positive integer.");
         }
 
         return ValidationResult.Success();
@@ -351,9 +392,36 @@ public sealed class RowsetResult
     };
 }
 
+/// <summary>Runs an operation with a bounded number of retries and a cancellable delay between attempts.
+/// Extracted as a standalone helper so retry/backoff behavior can be unit tested without a live connection.</summary>
+public static class RetryHelper
+{
+    public static T Execute<T>(int retries, int delayMilliseconds, CancellationToken cancellationToken, Func<T> action)
+    {
+        var totalAttempts = retries + 1;
+        for (var attempt = 1; attempt <= totalAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                return action();
+            }
+            catch when (attempt < totalAttempts)
+            {
+                // Transient failure with attempts remaining: wait (interruptibly) and try again.
+                cancellationToken.WaitHandle.WaitOne(delayMilliseconds);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        throw new UnreachableException("Retry loop exited without returning or throwing.");
+    }
+}
+
 public static class AnalysisServices
 {
-    public static AdomdConnection OpenConnection(CommonSettings settings)
+    public static AdomdConnection OpenConnection(CommonSettings settings, CancellationToken cancellationToken)
     {
         var connectionString = settings.ResolveConnectionString();
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -373,9 +441,12 @@ public static class AnalysisServices
             connectionString = string.Join(';', parts);
         }
 
-        var connection = new AdomdConnection(connectionString);
-        connection.Open();
-        return connection;
+        return RetryHelper.Execute(settings.Retries, settings.RetryDelayMilliseconds, cancellationToken, () =>
+        {
+            var connection = new AdomdConnection(connectionString);
+            connection.Open();
+            return connection;
+        });
     }
 
     public static RowsetResult ReadCatalogs(AdomdConnection connection, int limit)

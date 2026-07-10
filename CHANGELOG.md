@@ -12,6 +12,11 @@ All notable changes to this project are documented in this file.
 - Multiple result set support: `query`/`dmv` now return a `resultSets` array, so multi-statement batches no longer silently drop all but the first result set.
 - Cancellation support: commands honor Ctrl+C during query execution and exit with code `130`.
 - Release workflow now verifies the pushed tag matches `VersionPrefix` in `Adomd.Cli.csproj` before publishing.
+- `--retries`/`--retry-delay-ms` options to retry opening the connection on transient failures, with a cancellable delay between attempts.
+- Secrets (password/pwd/secret/client secret/access token fragments) are now redacted from error output before it's written to stderr or the JSON payload.
+- Release artifacts now include a SHA256 checksum file alongside the zip.
+- Dependabot now also tracks NuGet packages in `Adomd.Cli.Tests`.
+- README table of common `schema --rowset` GUIDs.
 
 ### Changed
 - **Breaking:** JSON output shape for `catalogs`, `schema`, and `query` changed. Row-bearing fields are now objects of the form `{ rowCount, truncated, rows }` instead of bare arrays, and `query`/`dmv` return `resultSets` instead of a top-level `rows`/`rowCount` pair.

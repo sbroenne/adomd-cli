@@ -66,6 +66,39 @@ public class CommonSettingsTests
     }
 
     [Fact]
+    public void Validate_Fails_WhenRetriesIsNegative()
+    {
+        using var _ = new EnvironmentVariableScope(EnvVarName, null);
+        var settings = new CommonSettings { Server = "localhost", Limit = 200, ConnectTimeoutSeconds = 15, Retries = -1 };
+
+        var result = settings.Validate();
+
+        Assert.False(result.Successful);
+        Assert.Contains("--retries", result.Message);
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenRetryDelayIsNegative()
+    {
+        using var _ = new EnvironmentVariableScope(EnvVarName, null);
+        var settings = new CommonSettings { Server = "localhost", Limit = 200, ConnectTimeoutSeconds = 15, RetryDelayMilliseconds = -1 };
+
+        var result = settings.Validate();
+
+        Assert.False(result.Successful);
+        Assert.Contains("--retry-delay-ms", result.Message);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_WhenRetriesAndDelayAreZero()
+    {
+        using var _ = new EnvironmentVariableScope(EnvVarName, null);
+        var settings = new CommonSettings { Server = "localhost", Limit = 200, ConnectTimeoutSeconds = 15, Retries = 0, RetryDelayMilliseconds = 0 };
+
+        Assert.True(settings.Validate().Successful);
+    }
+
+    [Fact]
     public void ResolveConnectionString_PrefersExplicitOption_OverEnvironmentVariable()
     {
         using var _ = new EnvironmentVariableScope(EnvVarName, "Data Source=fromEnv");
