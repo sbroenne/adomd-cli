@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Adomd.Cli/Adomd.Cli.csproj" />
+    <Project Path="src/Adomd.Cli.Tests/Adomd.Cli.Tests.csproj" />
   </Folder>
 </Solution>

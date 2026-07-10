@@ -17,6 +17,8 @@ The CLI uses `Spectre.Console.Cli` for command parsing/help and `Spectre.Console
 
 When `--connection-string` is omitted, the CLI builds a connection string with `Integrated Security=SSPI`. Native SSAS TCP with Windows Integrated Auth generally requires Windows. The CI/CD workflows also run on Windows runners because ADOMD.NET is Windows-oriented.
 
+Instead of passing `--connection-string` on the command line (which can leak into shell history and process listings), you can set the `ADOMD_CONNECTION_STRING` environment variable. The explicit option always takes precedence when both are set.
+
 ## Install
 
 Download `adomd-cli-win-x64.zip` from the latest GitHub Release, extract it, and run the self-contained Windows executable:
@@ -63,18 +65,40 @@ dotnet run --project src\Adomd.Cli -- query --connection-string "<connection str
 | --- | --- |
 | `--server <name>` | Analysis Services server |
 | `--catalog <name>` | Initial catalog/database |
-| `--connection-string <value>` | Full ADOMD.NET connection string |
+| `--connection-string <value>` | Full ADOMD.NET connection string (falls back to the `ADOMD_CONNECTION_STRING` environment variable) |
 | `--query <text>` | Query text; use `--query -` to read from stdin |
 | `--query-file <path>` | File containing query text |
 | `--limit <n>` | Maximum rows per result set; default `200` |
 | `--connect-timeout <sec>` | Connection timeout; default `15` |
 | `--query-timeout <sec>` | Query timeout; default `120` |
+| `--rowset <guid>` | `schema` only, repeatable; fetch additional schema rowsets by GUID beyond the built-in six |
+
+## Output shape
+
+Every row-returning field (`catalogs`, `cubes`, `dimensions`, `hierarchies`, `levels`, `measures`, `sets`, each `schema --rowset` entry, and each entry in `query`'s `resultSets`) is an object with `rowCount`, `truncated`, and `rows`, so you can always tell whether `--limit` cut off the result:
+
+```json
+{
+  "ok": true,
+  "command": "query",
+  "resultSetCount": 1,
+  "rowCount": 2,
+  "truncated": false,
+  "resultSets": [
+    { "rowCount": 2, "truncated": false, "rows": [ { "col": 1 }, { "col": 2 } ] }
+  ]
+}
+```
+
+`query`/`dmv` can return more than one entry in `resultSets` when a batch produces multiple result sets.
+
+Errors produce `{ "ok": false, "error": ..., "exception": ..., "inner": ... }` and a non-zero exit code: `2` for a general failure, `130` if the command was cancelled (e.g. Ctrl+C).
 
 ## CI/CD
 
 - `CI` runs on pushes to `main` and pull requests. It restores, verifies formatting, builds, runs tests when test projects exist, publishes the Windows executable, and uploads the zipped artifact.
 - `CodeQL` runs on pushes, pull requests, and a weekly schedule.
-- `Release` runs for semantic version tags like `v1.2.3`. It publishes the Windows executable, creates a GitHub Release, and attaches the zipped artifact.
+- `Release` runs for semantic version tags like `v1.2.3`. It verifies the tag matches `VersionPrefix` in `Adomd.Cli.csproj`, publishes the Windows executable, creates a GitHub Release, and attaches the zipped artifact.
 
 To create a release:
 

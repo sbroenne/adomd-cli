@@ -35,13 +35,13 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore .\src\Adomd.Cli\Adomd.Cli.csproj
+        run: dotnet restore .\Adomd.Cli.slnx
 
       - name: Verify formatting
         run: dotnet format .\Adomd.Cli.slnx --verify-no-changes --no-restore
 
       - name: Build
-        run: dotnet build .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --no-restore
+        run: dotnet build .\Adomd.Cli.slnx --configuration Release --no-restore
 
       - name: Test
         shell: pwsh

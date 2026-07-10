@@ -34,6 +34,12 @@ jobs:
             throw "Tag '$env:GITHUB_REF_NAME' must be a semantic version tag like v1.2.3."
           }
 
+          [xml]$csproj = Get-Content .\src\Adomd.Cli\Adomd.Cli.csproj
+          $versionPrefix = $csproj.Project.PropertyGroup.VersionPrefix | Select-Object -First 1
+          if ($versionPrefix -ne $version) {
+            throw "Tag version '$version' does not match VersionPrefix '$versionPrefix' in Adomd.Cli.csproj. Update the csproj before tagging a release."
+          }
+
           "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Restore
