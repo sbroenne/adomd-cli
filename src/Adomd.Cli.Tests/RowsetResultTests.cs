@@ -54,14 +54,33 @@ public class RowsetResultTests
     }
 
     [Fact]
-    public void Error_WrapsExceptionDetailsAsASingleRow()
+    public void Error_CarriesExceptionDetailsAndFlagsIsError()
     {
         var result = RowsetResult.Error(new InvalidOperationException("boom"));
 
         Assert.False(result.Truncated);
-        Assert.Single(result.Rows);
-        Assert.Equal("boom", result.Rows[0]["error"]);
-        Assert.Equal(typeof(InvalidOperationException).FullName, result.Rows[0]["exception"]);
+        Assert.Empty(result.Rows);
+        Assert.True(result.IsError);
+        Assert.Equal("boom", result.ErrorMessage);
+        Assert.Equal(typeof(InvalidOperationException).FullName, result.ErrorType);
+    }
+
+    [Fact]
+    public void ToJson_IncludesErrorFields_WhenErrored()
+    {
+        dynamic json = RowsetResult.Error(new InvalidOperationException("boom")).ToJson();
+
+        Assert.Equal("boom", json.error);
+        Assert.Equal(typeof(InvalidOperationException).FullName, json.exception);
+    }
+
+    [Fact]
+    public void IsError_False_ForNormalResult()
+    {
+        var result = new RowsetResult { Rows = [], Truncated = false };
+
+        Assert.False(result.IsError);
+        Assert.Null(result.ErrorMessage);
     }
 
     private static DataTable CreateTable(int rowCount)

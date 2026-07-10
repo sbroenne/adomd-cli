@@ -4,7 +4,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>adomd</AssemblyName>
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.2.1</VersionPrefix>
     <Authors>sbroenne</Authors>
     <Description>JSON-first command-line wrapper for querying Analysis Services through ADOMD.NET.</Description>
     <PackageProjectUrl>https://github.com/sbroenne/adomd-cli</PackageProjectUrl>
