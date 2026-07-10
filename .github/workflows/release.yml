@@ -34,6 +34,12 @@ jobs:
             throw "Tag '$env:GITHUB_REF_NAME' must be a semantic version tag like v1.2.3."
           }
 
+          [xml]$csproj = Get-Content .\src\Adomd.Cli\Adomd.Cli.csproj
+          $versionPrefix = $csproj.Project.PropertyGroup.VersionPrefix | Select-Object -First 1
+          if ($versionPrefix -ne $version) {
+            throw "Tag version '$version' does not match VersionPrefix '$versionPrefix' in Adomd.Cli.csproj. Update the csproj before tagging a release."
+          }
+
           "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Restore
@@ -46,11 +52,19 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\adomd-cli-win-x64.zip -Force
 
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash -Path .\artifacts\adomd-cli-win-x64.zip -Algorithm SHA256
+          "$($hash.Hash.ToLowerInvariant())  adomd-cli-win-x64.zip" | Out-File -FilePath .\artifacts\adomd-cli-win-x64.zip.sha256 -Encoding ascii -NoNewline
+
       - name: Upload executable artifact
         uses: actions/upload-artifact@v7
         with:
           name: adomd-cli-win-x64
-          path: artifacts\adomd-cli-win-x64.zip
+          path: |
+            artifacts\adomd-cli-win-x64.zip
+            artifacts\adomd-cli-win-x64.zip.sha256
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -58,4 +72,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME ./artifacts/adomd-cli-win-x64.zip --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
+          gh release create $env:GITHUB_REF_NAME ./artifacts/adomd-cli-win-x64.zip ./artifacts/adomd-cli-win-x64.zip.sha256 --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag

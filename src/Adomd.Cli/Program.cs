@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.RegularExpressions;
 using Microsoft.AnalysisServices.AdomdClient;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -32,12 +34,20 @@ app.Configure(config =>
 
 return app.Run(args);
 
+/// <summary>Exit codes returned by JSON commands, exposed for tests and callers scripting against the CLI.</summary>
+public static class ExitCodes
+{
+    public const int Success = 0;
+    public const int Error = 2;
+    public const int Cancelled = 130;
+}
+
 public sealed class ProbeCommand : JsonCommand<CommonSettings>
 {
-    protected override object ExecuteJson(CommonSettings settings)
+    protected override object ExecuteJson(CommonSettings settings, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
         var catalogs = AnalysisServices.ReadCatalogs(connection, settings.Limit);
 
         return new
@@ -49,54 +59,102 @@ public sealed class ProbeCommand : JsonCommand<CommonSettings>
             os = RuntimeInformation.OSDescription,
             framework = RuntimeInformation.FrameworkDescription,
             elapsedMs = sw.ElapsedMilliseconds,
-            catalogs
+            catalogs = catalogs.ToJson()
         };
     }
 }
 
 public sealed class CatalogsCommand : JsonCommand<CommonSettings>
 {
-    protected override object ExecuteJson(CommonSettings settings)
+    protected override object ExecuteJson(CommonSettings settings, CancellationToken cancellationToken)
     {
-        using var connection = AnalysisServices.OpenConnection(settings);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
         return new
         {
             ok = true,
             command = "catalogs",
             server = settings.Server,
-            catalogs = AnalysisServices.ReadCatalogs(connection, settings.Limit)
+            catalogs = AnalysisServices.ReadCatalogs(connection, settings.Limit).ToJson()
         };
     }
 }
 
-public sealed class SchemaCommand : JsonCommand<CommonSettings>
+public sealed class SchemaSettings : CommonSettings
 {
-    protected override object ExecuteJson(CommonSettings settings)
+    [CommandOption("--rowset <GUID>")]
+    [Description("Additional schema rowset GUID(s) to include beyond the built-in set (e.g. a DBSCHEMA_*/MDSCHEMA_* constant). Repeatable.")]
+    public string[] Rowsets { get; init; } = [];
+
+    public override ValidationResult Validate()
     {
-        using var connection = AnalysisServices.OpenConnection(settings);
+        var baseResult = base.Validate();
+        if (!baseResult.Successful)
+        {
+            return baseResult;
+        }
+
+        foreach (var rowset in Rowsets)
+        {
+            if (!Guid.TryParse(rowset, out _))
+            {
+                return ValidationResult.Error($"--rowset value '{rowset}' is not a valid GUID.");
+            }
+        }
+
+        return ValidationResult.Success();
+    }
+}
+
+public sealed class SchemaCommand : JsonCommand<SchemaSettings>
+{
+    protected override object ExecuteJson(SchemaSettings settings, CancellationToken cancellationToken)
+    {
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var cubes = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Cubes, settings.Limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        var dimensions = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Dimensions, settings.Limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        var hierarchies = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Hierarchies, settings.Limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        var levels = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Levels, settings.Limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        var measures = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Measures, settings.Limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        var sets = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Sets, settings.Limit);
+
+        var custom = new Dictionary<string, object>();
+        foreach (var rowset in settings.Rowsets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            custom[rowset] = AnalysisServices.ReadSchemaRowset(connection, Guid.Parse(rowset), settings.Limit).ToJson();
+        }
+
         return new
         {
             ok = true,
             command = "schema",
             server = settings.Server,
             catalog = settings.Catalog,
-            cubes = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Cubes, settings.Limit),
-            dimensions = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Dimensions, settings.Limit),
-            hierarchies = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Hierarchies, settings.Limit),
-            levels = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Levels, settings.Limit),
-            measures = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Measures, settings.Limit),
-            sets = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Sets, settings.Limit)
+            cubes = cubes.ToJson(),
+            dimensions = dimensions.ToJson(),
+            hierarchies = hierarchies.ToJson(),
+            levels = levels.ToJson(),
+            measures = measures.ToJson(),
+            sets = sets.ToJson(),
+            custom
         };
     }
 }
 
 public sealed class QueryCommand : JsonCommand<QuerySettings>
 {
-    protected override object ExecuteJson(QuerySettings settings)
+    protected override object ExecuteJson(QuerySettings settings, CancellationToken cancellationToken)
     {
         var query = settings.ResolveQuery();
-        using var connection = AnalysisServices.OpenConnection(settings);
-        var rows = AnalysisServices.ExecuteTabular(connection, query, settings.Limit, settings.QueryTimeoutSeconds);
+        using var connection = AnalysisServices.OpenConnection(settings, cancellationToken);
+        var resultSets = AnalysisServices.ExecuteTabular(connection, query, settings.Limit, settings.QueryTimeoutSeconds, cancellationToken);
 
         return new
         {
@@ -104,8 +162,10 @@ public sealed class QueryCommand : JsonCommand<QuerySettings>
             command = "query",
             server = settings.Server,
             catalog = settings.Catalog,
-            rowCount = rows.Count,
-            rows
+            resultSetCount = resultSets.Count,
+            rowCount = resultSets.Sum(r => r.RowCount),
+            truncated = resultSets.Any(r => r.Truncated),
+            resultSets = resultSets.Select(r => r.ToJson()).ToList()
         };
     }
 }
@@ -117,24 +177,38 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
     {
         try
         {
-            WriteJson(ExecuteJson(settings));
-            return 0;
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteJson(ExecuteJson(settings, cancellationToken));
+            return ExitCodes.Success;
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            Console.Error.WriteLine($"adomd error: {ex.Message}");
+            Console.Error.WriteLine("adomd error: operation was cancelled.");
             WriteJson(new
             {
                 ok = false,
-                error = ex.Message,
-                exception = ex.GetType().FullName,
-                inner = ex.InnerException?.Message
+                error = "Operation was cancelled.",
+                exception = typeof(OperationCanceledException).FullName
             });
-            return 2;
+            return ExitCodes.Cancelled;
+        }
+        catch (Exception ex)
+        {
+            var message = SecretRedactor.Redact(ex.Message);
+            var innerMessage = SecretRedactor.Redact(ex.InnerException?.Message);
+            Console.Error.WriteLine($"adomd error: {message}");
+            WriteJson(new
+            {
+                ok = false,
+                error = message,
+                exception = ex.GetType().FullName,
+                inner = innerMessage
+            });
+            return ExitCodes.Error;
         }
     }
 
-    protected abstract object ExecuteJson(TSettings settings);
+    protected abstract object ExecuteJson(TSettings settings, CancellationToken cancellationToken);
 
     private static void WriteJson(object value)
     {
@@ -144,6 +218,23 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         }));
     }
+}
+
+/// <summary>Scrubs credential-bearing fragments (passwords, secrets, tokens) out of text before it is ever
+/// written to stderr or the JSON error payload. Some ADOMD/OLE DB providers echo the full connection string
+/// back in exception messages, which would otherwise leak secrets passed via --connection-string.</summary>
+public static partial class SecretRedactor
+{
+    [GeneratedRegex(
+        @"(?<key>password|pwd|secret|client secret|access token)\s*=\s*[^;]*",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex SecretPattern();
+
+    [return: NotNullIfNotNull(nameof(text))]
+    public static string? Redact(string? text) =>
+        text is null
+            ? null
+            : SecretPattern().Replace(text, match => $"{match.Groups["key"].Value.ToLowerInvariant()}=***");
 }
 
 public class CommonSettings : CommandSettings
@@ -157,7 +248,7 @@ public class CommonSettings : CommandSettings
     public string? Catalog { get; init; }
 
     [CommandOption("--connection-string <CONNECTION_STRING>")]
-    [Description("Full ADOMD.NET connection string.")]
+    [Description("Full ADOMD.NET connection string. Falls back to the ADOMD_CONNECTION_STRING environment variable when omitted, which keeps secrets out of the process command line and shell history.")]
     public string? ConnectionString { get; init; }
 
     [CommandOption("--limit <LIMIT>")]
@@ -170,11 +261,28 @@ public class CommonSettings : CommandSettings
     [DefaultValue(15)]
     public int ConnectTimeoutSeconds { get; init; }
 
+    [CommandOption("--retries <N>")]
+    [Description("Number of times to retry opening the connection after a transient failure.")]
+    [DefaultValue(0)]
+    public int Retries { get; init; }
+
+    [CommandOption("--retry-delay-ms <MILLISECONDS>")]
+    [Description("Delay between connection retry attempts, in milliseconds.")]
+    [DefaultValue(1000)]
+    public int RetryDelayMilliseconds { get; init; }
+
+    /// <summary>The connection string to use, preferring the explicit option and falling back to the
+    /// <c>ADOMD_CONNECTION_STRING</c> environment variable so secrets don't need to appear on the command line.</summary>
+    public string? ResolveConnectionString() =>
+        string.IsNullOrWhiteSpace(ConnectionString)
+            ? Environment.GetEnvironmentVariable("ADOMD_CONNECTION_STRING")
+            : ConnectionString;
+
     public override ValidationResult Validate()
     {
-        if (string.IsNullOrWhiteSpace(ConnectionString) && string.IsNullOrWhiteSpace(Server))
+        if (string.IsNullOrWhiteSpace(ResolveConnectionString()) && string.IsNullOrWhiteSpace(Server))
         {
-            return ValidationResult.Error("Specify --server or --connection-string.");
+            return ValidationResult.Error("Specify --server, --connection-string, or set the ADOMD_CONNECTION_STRING environment variable.");
         }
 
         if (Limit <= 0)
@@ -185,6 +293,16 @@ public class CommonSettings : CommandSettings
         if (ConnectTimeoutSeconds <= 0)
         {
             return ValidationResult.Error("--connect-timeout must be a positive integer.");
+        }
+
+        if (Retries < 0)
+        {
+            return ValidationResult.Error("--retries must be zero or a positive integer.");
+        }
+
+        if (RetryDelayMilliseconds < 0)
+        {
+            return ValidationResult.Error("--retry-delay-ms must be zero or a positive integer.");
         }
 
         return ValidationResult.Success();
@@ -248,11 +366,64 @@ public sealed class QuerySettings : CommonSettings
     }
 }
 
+/// <summary>A set of rows capped at a caller-supplied limit, along with whether more rows existed than were returned.</summary>
+public sealed class RowsetResult
+{
+    public required IReadOnlyList<Dictionary<string, object?>> Rows { get; init; }
+    public required bool Truncated { get; init; }
+
+    public int RowCount => Rows.Count;
+
+    /// <summary>Shapes this result for JSON output as an object carrying its own row count and truncation flag,
+    /// so callers never have to guess whether a short result was complete or cut off by --limit.</summary>
+    public object ToJson() => new { rowCount = RowCount, truncated = Truncated, rows = Rows };
+
+    public static RowsetResult Error(Exception ex) => new()
+    {
+        Truncated = false,
+        Rows =
+        [
+            new Dictionary<string, object?>
+            {
+                ["error"] = ex.Message,
+                ["exception"] = ex.GetType().FullName
+            }
+        ]
+    };
+}
+
+/// <summary>Runs an operation with a bounded number of retries and a cancellable delay between attempts.
+/// Extracted as a standalone helper so retry/backoff behavior can be unit tested without a live connection.</summary>
+public static class RetryHelper
+{
+    public static T Execute<T>(int retries, int delayMilliseconds, CancellationToken cancellationToken, Func<T> action)
+    {
+        var totalAttempts = retries + 1;
+        for (var attempt = 1; attempt <= totalAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                return action();
+            }
+            catch when (attempt < totalAttempts)
+            {
+                // Transient failure with attempts remaining: wait (interruptibly) and try again.
+                cancellationToken.WaitHandle.WaitOne(delayMilliseconds);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        throw new UnreachableException("Retry loop exited without returning or throwing.");
+    }
+}
+
 public static class AnalysisServices
 {
-    public static AdomdConnection OpenConnection(CommonSettings settings)
+    public static AdomdConnection OpenConnection(CommonSettings settings, CancellationToken cancellationToken)
     {
-        var connectionString = settings.ConnectionString;
+        var connectionString = settings.ResolveConnectionString();
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             var parts = new List<string>
@@ -270,64 +441,99 @@ public static class AnalysisServices
             connectionString = string.Join(';', parts);
         }
 
-        var connection = new AdomdConnection(connectionString);
-        connection.Open();
-        return connection;
+        return RetryHelper.Execute(settings.Retries, settings.RetryDelayMilliseconds, cancellationToken, () =>
+        {
+            var connection = new AdomdConnection(connectionString);
+            connection.Open();
+            return connection;
+        });
     }
 
-    public static IReadOnlyList<Dictionary<string, object?>> ReadCatalogs(AdomdConnection connection, int limit)
+    public static RowsetResult ReadCatalogs(AdomdConnection connection, int limit)
     {
         var dataSet = connection.GetSchemaDataSet(AdomdSchemaGuid.Catalogs, null);
-        return dataSet.Tables.Count == 0 ? [] : DataTableToRows(dataSet.Tables[0], limit);
+        return dataSet.Tables.Count == 0
+            ? new RowsetResult { Rows = [], Truncated = false }
+            : DataTableToRows(dataSet.Tables[0], limit);
     }
 
-    public static IReadOnlyList<Dictionary<string, object?>> ReadSchemaRowset(AdomdConnection connection, Guid schema, int limit)
+    public static RowsetResult ReadSchemaRowset(AdomdConnection connection, Guid schema, int limit)
     {
         try
         {
             var dataSet = connection.GetSchemaDataSet(schema, null);
-            return dataSet.Tables.Count == 0 ? [] : DataTableToRows(dataSet.Tables[0], limit);
+            return dataSet.Tables.Count == 0
+                ? new RowsetResult { Rows = [], Truncated = false }
+                : DataTableToRows(dataSet.Tables[0], limit);
         }
         catch (Exception ex)
         {
-            return
-            [
-                new Dictionary<string, object?>
-                {
-                    ["error"] = ex.Message,
-                    ["exception"] = ex.GetType().FullName
-                }
-            ];
+            return RowsetResult.Error(ex);
         }
     }
 
-    public static List<Dictionary<string, object?>> ExecuteTabular(
+    /// <summary>Executes a query and returns one <see cref="RowsetResult"/> per result set, since a single
+    /// MDX/DAX/DMX batch can return multiple result sets that were previously silently dropped.</summary>
+    public static List<RowsetResult> ExecuteTabular(
         AdomdConnection connection,
         string query,
         int limit,
-        int queryTimeoutSeconds)
+        int queryTimeoutSeconds,
+        CancellationToken cancellationToken)
     {
         using var command = connection.CreateCommand();
         command.CommandText = query;
         command.CommandTimeout = queryTimeoutSeconds;
 
-        using var reader = command.ExecuteReader();
-        var rows = new List<Dictionary<string, object?>>();
-        while (reader.Read() && rows.Count < limit)
+        using var registration = cancellationToken.Register(() =>
         {
-            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < reader.FieldCount; i++)
+            try
             {
-                row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                command.Cancel();
+            }
+            catch
+            {
+                // Best-effort: the command may have already completed or the provider may not support cancellation.
+            }
+        });
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var reader = command.ExecuteReader();
+        var resultSets = new List<RowsetResult>();
+
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rows = new List<Dictionary<string, object?>>();
+            var truncated = false;
+
+            while (reader.Read())
+            {
+                if (rows.Count < limit)
+                {
+                    var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    for (var i = 0; i < reader.FieldCount; i++)
+                    {
+                        row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    }
+
+                    rows.Add(row);
+                }
+                else
+                {
+                    // Keep draining so NextResult() can advance cleanly, but stop storing rows past the limit.
+                    truncated = true;
+                }
             }
 
-            rows.Add(row);
+            resultSets.Add(new RowsetResult { Rows = rows, Truncated = truncated });
         }
+        while (reader.NextResult());
 
-        return rows;
+        return resultSets;
     }
 
-    private static List<Dictionary<string, object?>> DataTableToRows(DataTable table, int limit)
+    internal static RowsetResult DataTableToRows(DataTable table, int limit)
     {
         var rows = new List<Dictionary<string, object?>>();
         foreach (DataRow dataRow in table.Rows)
@@ -347,6 +553,6 @@ public static class AnalysisServices
             rows.Add(row);
         }
 
-        return rows;
+        return new RowsetResult { Rows = rows, Truncated = table.Rows.Count > limit };
     }
 }
