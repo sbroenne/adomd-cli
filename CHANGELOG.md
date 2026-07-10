@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.2.0]
 
 ### Added
 - `Adomd.Cli.Tests` xUnit test project covering settings validation, connection-string resolution, query resolution, and rowset truncation logic. Wired into CI via the existing test-discovery step.
