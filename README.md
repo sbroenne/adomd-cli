@@ -80,6 +80,7 @@ dotnet run --project src\Adomd.Cli -- query --connection-string "<connection str
 | `--retries <n>` | Number of times to retry opening the connection after a transient failure; default `0` |
 | `--retry-delay-ms <ms>` | Delay between connection retry attempts; default `1000` |
 | `--rowset <guid>` | `schema` only, repeatable; fetch additional schema rowsets by GUID beyond the built-in six |
+| `--compact` | Emit single-line (unindented) JSON, friendlier for piping into line-based tools |
 
 Retries only cover opening the connection (useful for Azure AS auto-resume/auto-scale delays); they do not retry a failed query execution. Retry waits are interruptible with Ctrl+C.
 
@@ -119,6 +120,10 @@ Every row-returning field (`catalogs`, `cubes`, `dimensions`, `hierarchies`, `le
 ```
 
 `query`/`dmv` can return more than one entry in `resultSets` when a batch produces multiple result sets.
+
+If a `schema` rowset can't be read (for example, a rowset that isn't supported on the target model), `schema` reports `"partial": true` and lists the failures in a top-level `warnings` array, and the affected rowset object carries its own `error`/`exception` fields. The other rowsets are still returned.
+
+By default JSON is pretty-printed; pass `--compact` to emit it on a single line for piping into tools like `jq`.
 
 Errors produce `{ "ok": false, "error": ..., "exception": ..., "inner": ... }` and a non-zero exit code: `2` for a general failure, `130` if the command was cancelled (e.g. Ctrl+C). Credential-bearing fragments (`password=`, `pwd=`, `secret=`, `client secret=`, `access token=`) are redacted from `error`/`inner` and stderr before they're written, in case an ADOMD/OLE DB provider echoes the connection string back in an exception message.
 

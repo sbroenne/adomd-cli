@@ -46,7 +46,7 @@ jobs:
         run: dotnet restore .\src\Adomd.Cli\Adomd.Cli.csproj
 
       - name: Publish win-x64 executable
-        run: dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output .\artifacts\publish\win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+        run: dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtime win-x64 --self-contained true --output .\artifacts\publish\win-x64 -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:Version=${{ env.PACKAGE_VERSION }} -p:PackageVersion=${{ env.PACKAGE_VERSION }}
 
       - name: Archive win-x64 executable
         shell: pwsh
@@ -57,6 +57,21 @@ jobs:
         run: |
           $hash = Get-FileHash -Path .\artifacts\adomd-cli-win-x64.zip -Algorithm SHA256
           "$($hash.Hash.ToLowerInvariant())  adomd-cli-win-x64.zip" | Out-File -FilePath .\artifacts\adomd-cli-win-x64.zip.sha256 -Encoding ascii -NoNewline
+
+      - name: Extract release notes
+        shell: pwsh
+        run: |
+          $version = $env:PACKAGE_VERSION
+          $changelog = Get-Content .\CHANGELOG.md -Raw
+          # Grab the body of the section for this version, up to the next "## [" heading.
+          $pattern = "(?ms)^##\s*\[$([regex]::Escape($version))\].*?$("`n")(.*?)(?=^##\s*\[|\z)"
+          $match = [regex]::Match($changelog, $pattern)
+          if ($match.Success) {
+            $notes = $match.Groups[1].Value.Trim()
+          } else {
+            $notes = "Release v$version"
+          }
+          Set-Content -Path .\artifacts\release-notes.md -Value $notes -Encoding utf8
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v7
@@ -72,4 +87,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME ./artifacts/adomd-cli-win-x64.zip ./artifacts/adomd-cli-win-x64.zip.sha256 --title $env:GITHUB_REF_NAME --notes "Release $env:GITHUB_REF_NAME" --verify-tag
+          gh release create $env:GITHUB_REF_NAME ./artifacts/adomd-cli-win-x64.zip ./artifacts/adomd-cli-win-x64.zip.sha256 --title $env:GITHUB_REF_NAME --notes-file ./artifacts/release-notes.md --verify-tag

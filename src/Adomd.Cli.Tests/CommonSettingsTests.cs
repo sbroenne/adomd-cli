@@ -1,3 +1,4 @@
+[Collection("EnvironmentSensitive")]
 public class CommonSettingsTests
 {
     private const string EnvVarName = "ADOMD_CONNECTION_STRING";

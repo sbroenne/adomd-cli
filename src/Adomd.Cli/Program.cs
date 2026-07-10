@@ -4,12 +4,17 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Microsoft.AnalysisServices.AdomdClient;
 using Spectre.Console;
 using Spectre.Console.Cli;
+
+// Emit UTF-8 so non-ASCII catalog/dimension/measure names and data values survive being
+// written to the console and parsed downstream, regardless of the host's default code page.
+Console.OutputEncoding = Encoding.UTF8;
 
 var app = new CommandApp();
 app.Configure(config =>
@@ -18,7 +23,9 @@ app.Configure(config =>
     config.SetApplicationVersion(
         Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "0.1.0");
+            ?.InformationalVersion
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)
+        ?? "0.0.0");
 
     config.AddCommand<ProbeCommand>("probe")
         .WithDescription("Open a connection and list visible catalogs.");
@@ -125,15 +132,34 @@ public sealed class SchemaCommand : JsonCommand<SchemaSettings>
         var sets = AnalysisServices.ReadSchemaRowset(connection, AdomdSchemaGuid.Sets, settings.Limit);
 
         var custom = new Dictionary<string, object>();
+        var customResults = new List<(string Name, RowsetResult Result)>();
         foreach (var rowset in settings.Rowsets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            custom[rowset] = AnalysisServices.ReadSchemaRowset(connection, Guid.Parse(rowset), settings.Limit).ToJson();
+            var result = AnalysisServices.ReadSchemaRowset(connection, Guid.Parse(rowset), settings.Limit);
+            customResults.Add((rowset, result));
+            custom[rowset] = result.ToJson();
         }
+
+        var named = new (string Name, RowsetResult Result)[]
+        {
+            ("cubes", cubes),
+            ("dimensions", dimensions),
+            ("hierarchies", hierarchies),
+            ("levels", levels),
+            ("measures", measures),
+            ("sets", sets)
+        };
+
+        var warnings = named.Concat(customResults)
+            .Where(n => n.Result.IsError)
+            .Select(n => new { rowset = n.Name, error = n.Result.ErrorMessage, exception = n.Result.ErrorType })
+            .ToList();
 
         return new
         {
-            ok = true,
+            ok = warnings.Count == 0,
+            partial = warnings.Count > 0,
             command = "schema",
             server = settings.Server,
             catalog = settings.Catalog,
@@ -143,7 +169,8 @@ public sealed class SchemaCommand : JsonCommand<SchemaSettings>
             levels = levels.ToJson(),
             measures = measures.ToJson(),
             sets = sets.ToJson(),
-            custom
+            custom,
+            warnings
         };
     }
 }
@@ -175,10 +202,11 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
 {
     protected sealed override int Execute(CommandContext context, TSettings settings, CancellationToken cancellationToken)
     {
+        var compact = settings is CommonSettings common && common.Compact;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            WriteJson(ExecuteJson(settings, cancellationToken));
+            WriteJson(ExecuteJson(settings, cancellationToken), compact);
             return ExitCodes.Success;
         }
         catch (OperationCanceledException)
@@ -189,7 +217,7 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
                 ok = false,
                 error = "Operation was cancelled.",
                 exception = typeof(OperationCanceledException).FullName
-            });
+            }, compact);
             return ExitCodes.Cancelled;
         }
         catch (Exception ex)
@@ -203,18 +231,18 @@ public abstract class JsonCommand<TSettings> : Command<TSettings>
                 error = message,
                 exception = ex.GetType().FullName,
                 inner = innerMessage
-            });
+            }, compact);
             return ExitCodes.Error;
         }
     }
 
     protected abstract object ExecuteJson(TSettings settings, CancellationToken cancellationToken);
 
-    private static void WriteJson(object value)
+    private static void WriteJson(object value, bool compact)
     {
         Console.WriteLine(JsonSerializer.Serialize(value, new JsonSerializerOptions
         {
-            WriteIndented = true,
+            WriteIndented = !compact,
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         }));
     }
@@ -270,6 +298,11 @@ public class CommonSettings : CommandSettings
     [Description("Delay between connection retry attempts, in milliseconds.")]
     [DefaultValue(1000)]
     public int RetryDelayMilliseconds { get; init; }
+
+    [CommandOption("--compact")]
+    [Description("Emit single-line (unindented) JSON, which is friendlier for piping into line-based tools.")]
+    [DefaultValue(false)]
+    public bool Compact { get; init; }
 
     /// <summary>The connection string to use, preferring the explicit option and falling back to the
     /// <c>ADOMD_CONNECTION_STRING</c> environment variable so secrets don't need to appear on the command line.</summary>
@@ -372,23 +405,27 @@ public sealed class RowsetResult
     public required IReadOnlyList<Dictionary<string, object?>> Rows { get; init; }
     public required bool Truncated { get; init; }
 
+    /// <summary>Non-null when the rowset could not be read; carries the failure message so callers can tell an
+    /// empty result apart from a failed one.</summary>
+    public string? ErrorMessage { get; init; }
+    public string? ErrorType { get; init; }
+
     public int RowCount => Rows.Count;
+
+    public bool IsError => ErrorMessage is not null;
 
     /// <summary>Shapes this result for JSON output as an object carrying its own row count and truncation flag,
     /// so callers never have to guess whether a short result was complete or cut off by --limit.</summary>
-    public object ToJson() => new { rowCount = RowCount, truncated = Truncated, rows = Rows };
+    public object ToJson() => ErrorMessage is null
+        ? new { rowCount = RowCount, truncated = Truncated, rows = Rows }
+        : new { rowCount = RowCount, truncated = Truncated, rows = Rows, error = ErrorMessage, exception = ErrorType };
 
     public static RowsetResult Error(Exception ex) => new()
     {
         Truncated = false,
-        Rows =
-        [
-            new Dictionary<string, object?>
-            {
-                ["error"] = ex.Message,
-                ["exception"] = ex.GetType().FullName
-            }
-        ]
+        Rows = [],
+        ErrorMessage = ex.Message,
+        ErrorType = ex.GetType().FullName
     };
 }
 
@@ -423,23 +460,7 @@ public static class AnalysisServices
 {
     public static AdomdConnection OpenConnection(CommonSettings settings, CancellationToken cancellationToken)
     {
-        var connectionString = settings.ResolveConnectionString();
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            var parts = new List<string>
-            {
-                $"Data Source={settings.Server}",
-                "Integrated Security=SSPI",
-                $"Connect Timeout={settings.ConnectTimeoutSeconds}"
-            };
-
-            if (!string.IsNullOrWhiteSpace(settings.Catalog))
-            {
-                parts.Add($"Initial Catalog={settings.Catalog}");
-            }
-
-            connectionString = string.Join(';', parts);
-        }
+        var connectionString = BuildConnectionString(settings);
 
         return RetryHelper.Execute(settings.Retries, settings.RetryDelayMilliseconds, cancellationToken, () =>
         {
@@ -447,6 +468,32 @@ public static class AnalysisServices
             connection.Open();
             return connection;
         });
+    }
+
+    /// <summary>Resolves the connection string to use: an explicit connection string (option or env var) wins,
+    /// otherwise a Windows-integrated (SSPI) string is composed from --server/--catalog/--connect-timeout.
+    /// Extracted so the composition logic can be unit tested without opening a live connection.</summary>
+    internal static string BuildConnectionString(CommonSettings settings)
+    {
+        var connectionString = settings.ResolveConnectionString();
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            return connectionString;
+        }
+
+        var parts = new List<string>
+        {
+            $"Data Source={settings.Server}",
+            "Integrated Security=SSPI",
+            $"Connect Timeout={settings.ConnectTimeoutSeconds}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(settings.Catalog))
+        {
+            parts.Add($"Initial Catalog={settings.Catalog}");
+        }
+
+        return string.Join(';', parts);
     }
 
     public static RowsetResult ReadCatalogs(AdomdConnection connection, int limit)

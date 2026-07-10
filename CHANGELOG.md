@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1]
+
+### Added
+- `--compact` option on all commands to emit single-line (unindented) JSON for piping into line-based tools.
+- `schema` now reports a top-level `partial` flag and a `warnings` array when one or more schema rowsets fail, instead of only signalling failure inside individual rows.
+
+### Changed
+- UTF-8 is now forced for console output so non-ASCII catalog, dimension, and measure names/values are emitted and parsed correctly regardless of the host code page.
+- When a `schema` rowset fails, the error is now reported via top-level `warnings` and per-rowset `error`/`exception` fields rather than as a synthetic data row inside `rows`.
+- Release builds now use ReadyToRun for faster startup, and the GitHub Release notes are populated from the matching `CHANGELOG.md` section.
+
+### Fixed
+- Corrected a stale hard-coded version fallback used when the assembly informational version attribute is unavailable.
+
 ## [0.2.0]
 
 ### Added
