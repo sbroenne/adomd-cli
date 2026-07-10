@@ -40,6 +40,15 @@ dotnet publish .\src\Adomd.Cli\Adomd.Cli.csproj --configuration Release --runtim
 .\artifacts\publish\win-x64\adomd.exe --help
 ```
 
+### Staying up to date
+
+The tool does not update itself. When it runs interactively, it performs a best-effort check against the GitHub Releases API and prints a one-line notice on **stderr** if a newer version is available; download the new release and replace `adomd.exe` to upgrade. The check:
+
+- never writes to stdout, so JSON output is unaffected;
+- runs at most once per day (the result is cached under `%LocalAppData%\adomd-cli`) and uses a short timeout;
+- is skipped automatically when stderr is redirected (scripts/CI) and fails silently when offline;
+- can be disabled entirely by setting `ADOMD_NO_UPDATE_CHECK=1`.
+
 ## Usage
 
 ```powershell

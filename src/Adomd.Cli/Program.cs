@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -39,7 +40,9 @@ app.Configure(config =>
         .WithDescription("Alias for query.");
 });
 
-return app.Run(args);
+var exitCode = app.Run(args);
+UpdateNotifier.Notify();
+return exitCode;
 
 /// <summary>Exit codes returned by JSON commands, exposed for tests and callers scripting against the CLI.</summary>
 public static class ExitCodes
@@ -602,4 +605,205 @@ public static class AnalysisServices
 
         return new RowsetResult { Rows = rows, Truncated = table.Rows.Count > limit };
     }
+}
+
+/// <summary>Best-effort, fail-silent nudge that tells the user (on stderr only) when a newer release exists.
+/// It never touches stdout, is throttled to at most one network call per day, uses a tight HTTP timeout, and
+/// is easy to silence for automation. Any failure is swallowed so it can never affect the command outcome.</summary>
+public static class UpdateNotifier
+{
+    private const string Repository = "sbroenne/adomd-cli";
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
+    private static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(2);
+
+    public static void Notify() => Notify(Console.Error);
+
+    internal static void Notify(TextWriter stderr)
+    {
+        try
+        {
+            if (IsDisabled())
+            {
+                return;
+            }
+
+            if (!TryParseVersion(GetCurrentInformationalVersion(), out var current))
+            {
+                return;
+            }
+
+            var latest = GetLatestKnownRelease();
+            if (latest is { } release && IsNewer(current, release.Version))
+            {
+                stderr.WriteLine(
+                    $"adomd: version {release.Version} is available (you have {current}). {release.Url}");
+                stderr.WriteLine("adomd: set ADOMD_NO_UPDATE_CHECK=1 to silence this check.");
+            }
+        }
+        catch
+        {
+            // Update notification is strictly best-effort; never let it affect the command result.
+        }
+    }
+
+    /// <summary>True when the check should be skipped: explicitly opted out, or stderr is being captured
+    /// (typical of scripts/CI) where an unsolicited message would be noise.</summary>
+    private static bool IsDisabled() => IsDisabled(
+        Environment.GetEnvironmentVariable("ADOMD_NO_UPDATE_CHECK"),
+        Console.IsErrorRedirected);
+
+    internal static bool IsDisabled(string? optOutValue, bool stderrRedirected)
+    {
+        var explicitlyDisabled = !string.IsNullOrEmpty(optOutValue)
+            && optOutValue != "0"
+            && !string.Equals(optOutValue, "false", StringComparison.OrdinalIgnoreCase);
+
+        return explicitlyDisabled || stderrRedirected;
+    }
+
+    /// <summary>Returns the latest release we know about, refreshing from GitHub at most once per
+    /// <see cref="CheckInterval"/> and otherwise serving the cached value so invocations stay fast.</summary>
+    private static (Version Version, string Url)? GetLatestKnownRelease()
+    {
+        var cachePath = GetCachePath();
+        var cache = ReadCache(cachePath);
+
+        var due = cache is null || DateTimeOffset.UtcNow - cache.Value.LastCheckUtc >= CheckInterval;
+        if (due)
+        {
+            var fetched = FetchLatestRelease();
+            // Record the attempt time regardless of success so an offline machine isn't slowed on every run,
+            // while keeping any previously cached version if this refresh failed.
+            var version = fetched?.Version.ToString() ?? cache?.Version;
+            var url = fetched?.Url ?? cache?.Url;
+            WriteCache(cachePath, new CacheEntry(DateTimeOffset.UtcNow, version, url));
+            cache = new CacheEntry(DateTimeOffset.UtcNow, version, url);
+        }
+
+        if (cache?.Version is { } cachedVersion
+            && cache.Value.Url is { } cachedUrl
+            && TryParseVersion(cachedVersion, out var parsed))
+        {
+            return (parsed, cachedUrl);
+        }
+
+        return null;
+    }
+
+    private static (Version Version, string Url)? FetchLatestRelease()
+    {
+        using var http = new HttpClient { Timeout = HttpTimeout };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("adomd-cli");
+        http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+
+        using var response = http.GetAsync($"https://api.github.com/repos/{Repository}/releases/latest")
+            .GetAwaiter().GetResult();
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("tag_name", out var tagElement)
+            || !TryParseVersion(tagElement.GetString(), out var version))
+        {
+            return null;
+        }
+
+        var url = root.TryGetProperty("html_url", out var urlElement)
+            ? urlElement.GetString() ?? $"https://github.com/{Repository}/releases/latest"
+            : $"https://github.com/{Repository}/releases/latest";
+
+        return (version, url);
+    }
+
+    private static string GetCurrentInformationalVersion() =>
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString(3)
+        ?? "0.0.0";
+
+    /// <summary>Parses a release tag or version string into a comparable <see cref="Version"/>, tolerating a
+    /// leading 'v' and stripping any pre-release/build metadata (e.g. "v1.2.3-rc1+sha" -> 1.2.3).</summary>
+    internal static bool TryParseVersion(string? raw, [NotNullWhen(true)] out Version? version)
+    {
+        version = null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var trimmed = raw.Trim();
+        if (trimmed.StartsWith('v') || trimmed.StartsWith('V'))
+        {
+            trimmed = trimmed[1..];
+        }
+
+        var metadataStart = trimmed.IndexOfAny(['-', '+']);
+        if (metadataStart >= 0)
+        {
+            trimmed = trimmed[..metadataStart];
+        }
+
+        return Version.TryParse(trimmed, out version);
+    }
+
+    internal static bool IsNewer(Version current, Version latest) => latest > current;
+
+    private static string GetCachePath() =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "adomd-cli",
+            "update-check.json");
+
+    private static CacheEntry? ReadCache(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("lastCheckUtc", out var lastCheckElement)
+                || !lastCheckElement.TryGetDateTimeOffset(out var lastCheck))
+            {
+                return null;
+            }
+
+            var version = root.TryGetProperty("latestVersion", out var v) ? v.GetString() : null;
+            var url = root.TryGetProperty("latestUrl", out var u) ? u.GetString() : null;
+            return new CacheEntry(lastCheck, version, url);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteCache(string path, CacheEntry entry)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var payload = JsonSerializer.Serialize(new
+            {
+                lastCheckUtc = entry.LastCheckUtc,
+                latestVersion = entry.Version,
+                latestUrl = entry.Url
+            });
+            File.WriteAllText(path, payload);
+        }
+        catch
+        {
+            // A non-writable cache just means we re-check next time; not worth surfacing.
+        }
+    }
+
+    private readonly record struct CacheEntry(DateTimeOffset LastCheckUtc, string? Version, string? Url);
 }
