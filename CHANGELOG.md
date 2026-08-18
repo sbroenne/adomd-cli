@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.3]
+
+### Changed
+- Updated dependencies: `Microsoft.AnalysisServices.AdomdClient` to `19.114.12`, `Microsoft.NET.Test.Sdk` to `18.9.0`, `actions/setup-dotnet` to `v6`, and the .NET SDK pinned in `global.json` to `10.0.400`.
+
 ## [0.2.2]
 
 ### Added
