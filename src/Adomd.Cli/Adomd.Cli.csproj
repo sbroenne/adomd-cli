@@ -26,7 +26,7 @@
     <PackageReference Include="Microsoft.AnalysisServices.AdomdClient" Version="19.114.12" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.400" PrivateAssets="all" />
     <PackageReference Include="Spectre.Console" Version="0.57.2" />
-    <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.57.2" />
   </ItemGroup>
 
 </Project>
